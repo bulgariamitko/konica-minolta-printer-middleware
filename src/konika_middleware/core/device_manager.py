@@ -164,13 +164,15 @@ class DeviceManager:
                 from ..devices.km_c654e import KMC654eAdapter
                 adapter = KMC654eAdapter(device, self.settings)
             elif device.type == DeviceType.C759:
-                from ..devices.km_c759 import KMC759Adapter  # We'll create this
-                adapter = KMC759Adapter(device, self.settings)
+                # C759 typically has Fiery controller
+                from ..devices.fiery_adapter import FieryDeviceAdapter
+                adapter = FieryDeviceAdapter(device, self.settings)
             elif device.type == DeviceType.C754E:
-                from ..devices.km_c754e import KMC754eAdapter  # We'll create this
-                adapter = KMC754eAdapter(device, self.settings)
+                # C754e typically has Fiery controller
+                from ..devices.fiery_adapter import FieryDeviceAdapter
+                adapter = FieryDeviceAdapter(device, self.settings)
             elif device.type == DeviceType.KM2100:
-                from ..devices.km_2100 import KM2100Adapter  # We'll create this
+                from ..devices.km_2100 import KM2100Adapter
                 adapter = KM2100Adapter(device, self.settings)
             else:
                 raise ValueError(f"Unsupported device type: {device.type}")

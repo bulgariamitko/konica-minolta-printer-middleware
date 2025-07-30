@@ -36,12 +36,19 @@ class NetworkDiscovery:
         }
     }
     
-    # SNMP OIDs that identify Konica Minolta devices
+    # SNMP OIDs that identify Konica Minolta devices and Fiery controllers
     KM_IDENTIFIERS = [
         "KONICA MINOLTA",
         "bizhub",
         "magicolor",
-        "pagepro"
+        "pagepro",
+        # Fiery controller identifiers
+        "Fiery",
+        "EFI",
+        "Fiery ES",
+        "Fiery E100",
+        "IC-418",
+        "60-55C-KM"
     ]
     
     def __init__(self, snmp_community: str = "public"):
@@ -120,11 +127,13 @@ class NetworkDiscovery:
             }
             
             try:
-                # Quick ping check first
-                if not await self._ping_host(ip):
-                    return device_info
-                
-                device_info['reachable'] = True
+                # Quick ping check first (skip for LaunchAgent compatibility)  
+                is_reachable = await self._ping_host(ip)
+                if not is_reachable:
+                    # If ping fails, still try HTTP/SNMP (for LaunchAgent compatibility)
+                    logger.debug(f"Ping failed for {ip}, trying direct HTTP/SNMP discovery")
+                else:
+                    device_info['reachable'] = True
                 
                 # Try SNMP discovery
                 snmp_info = await self._snmp_discovery(ip)
@@ -140,6 +149,16 @@ class NetworkDiscovery:
                     device_info['http_accessible'] = True
                     if not device_info['is_km_device'] and self._is_konica_minolta(http_info):
                         device_info['is_km_device'] = True
+                
+                # Try Fiery detection if SNMP failed
+                if not device_info['is_km_device'] and device_info['http_accessible']:
+                    fiery_info = await self._fiery_discovery(ip)
+                    if fiery_info and fiery_info.get('is_fiery'):
+                        device_info['is_km_device'] = True
+                        device_info['fiery_controller'] = True
+                        device_info['fiery_info'] = fiery_info
+                        device_info['model'] = fiery_info.get('model', 'Fiery')
+                        device_info['device_type'] = self._determine_fiery_device_type(fiery_info)
                 
                 # If it's a KM device, try password discovery
                 if device_info['is_km_device']:
@@ -160,13 +179,14 @@ class NetworkDiscovery:
         """Quick ping test for host reachability."""
         try:
             process = await asyncio.create_subprocess_exec(
-                'ping', '-c', '1', '-W', '1000', ip,
+                'ping', '-c', '1', '-W', '3000', ip,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL
             )
-            await process.communicate()
+            await asyncio.wait_for(process.communicate(), timeout=5.0)
             return process.returncode == 0
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Ping failed for {ip}: {e}")
             return False
     
     async def _snmp_discovery(self, ip: str) -> Optional[Dict[str, Any]]:
@@ -175,13 +195,14 @@ class NetworkDiscovery:
             snmp_client = SNMPClient(ip, self.snmp_community)
             device_info = await snmp_client.get_device_info()
             return device_info
-        except Exception:
+        except Exception as e:
+            logger.debug(f"SNMP discovery failed for {ip}: {e}")
             return None
     
     async def _http_discovery(self, ip: str) -> Optional[Dict[str, Any]]:
         """Try HTTP discovery on device."""
         try:
-            timeout = aiohttp.ClientTimeout(total=3)
+            timeout = aiohttp.ClientTimeout(total=5)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 
                 # Try common web interface paths
@@ -198,12 +219,40 @@ class NetworkDiscovery:
                                     'content_snippet': content[:500],
                                     'headers': dict(response.headers)
                                 }
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"HTTP discovery failed for {ip}{path}: {e}")
                         continue
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"HTTP discovery session failed for {ip}: {e}")
         
         return None
+    
+    async def _fiery_discovery(self, ip: str) -> Optional[Dict[str, Any]]:
+        """Try Fiery controller discovery on device."""
+        try:
+            from ..devices.fiery_client import FieryClient
+            fiery_client = FieryClient(ip)
+            detection_result = await fiery_client.detect_fiery()
+            return detection_result
+        except Exception as e:
+            logger.debug(f"Fiery discovery failed for {ip}: {e}")
+            return None
+    
+    def _determine_fiery_device_type(self, fiery_info: Dict[str, Any]) -> Optional[DeviceType]:
+        """Determine device type for Fiery controllers based on model or endpoint info."""
+        model = fiery_info.get('model', '').upper()
+        
+        # Try to determine from model name
+        if 'C759' in model:
+            return DeviceType.C759
+        elif 'C754' in model:
+            return DeviceType.C754E
+        elif 'C654' in model:
+            return DeviceType.C654E
+        
+        # If model is not clear, we can't determine the exact type
+        # But we know it's a Fiery controller, so default to C759 (common Fiery model)
+        return DeviceType.C759
     
     def _is_konica_minolta(self, info: Dict[str, Any]) -> bool:
         """Check if device info indicates a Konica Minolta device."""
@@ -228,19 +277,41 @@ class NetworkDiscovery:
         """Extract device model from discovery info."""
         description = info.get('description', '')
         
-        # Common KM model patterns
+        # Common KM model patterns including Fiery controllers
         model_patterns = [
             r'bizhub\s+([C]?\d+[a-zA-Z]*)',
             r'magicolor\s+(\d+)',
             r'pagepro\s+(\d+)',
             r'AccurioPrint\s+(\d+)',
-            r'KONICA MINOLTA\s+([C]?\d+[a-zA-Z]*)'
+            r'KONICA MINOLTA\s+AccurioPrint\s+(\d+)',  # More specific AccurioPrint pattern
+            r'KONICA MINOLTA\s+bizhub\s+([C]?\d+[a-zA-Z]*)',  # More specific bizhub pattern
+            r'KONICA MINOLTA\s+([C]?\d+[a-zA-Z]*)',
+            # Fiery controller patterns
+            r'Fiery ES IC-(\d+)',  # Fiery ES IC-418 -> 418 -> map to C759
+            r'Fiery E(\d+)\s+60-55C-KM',  # Fiery E100 60-55C-KM -> E100 -> map to C754e
+            r'Fiery\s+([A-Z]+\d+)',  # General Fiery pattern
         ]
         
         for pattern in model_patterns:
             match = re.search(pattern, description, re.IGNORECASE)
             if match:
-                return match.group(1)
+                model = match.group(1)
+                
+                # Map Fiery controller codes to actual printer models
+                if 'IC-418' in description:
+                    return 'C759'  # IC-418 is typically on C759
+                elif 'E100' in description and '60-55C-KM' in description:
+                    return 'C754e'  # E100 60-55C-KM is typically on C754e
+                elif pattern.startswith(r'Fiery'):
+                    # For other Fiery controllers, try to infer from the code
+                    if '418' in model:
+                        return 'C759'
+                    elif '100' in model:
+                        return 'C754e'
+                    else:
+                        return f'Fiery-{model}'
+                
+                return model
         
         return None
     
@@ -332,8 +403,11 @@ class NetworkDiscovery:
                     # Success indicators: redirect, or 200 with admin cookies
                     if response.status in [200, 302]:
                         # Check for admin session cookies or redirect
-                        cookies = dict(session.cookie_jar)
-                        if any('ID' in str(cookie) for cookie in cookies) or response.status == 302:
+                        cookies = {}
+                        for cookie in session.cookie_jar:
+                            cookies[cookie.key] = cookie.value
+                        
+                        if any('ID' in cookie_name for cookie_name in cookies.keys()) or response.status == 302:
                             return True
         
         except Exception:
