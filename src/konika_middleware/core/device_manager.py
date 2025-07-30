@@ -249,12 +249,22 @@ class DeviceManager:
         }
     
     async def discover_devices(self, network: str = None) -> List[Device]:
-        """Discover Konica Minolta devices on the network."""
-        logger.info("Starting network device discovery...")
-        
+        """Discover Konica Minolta devices based on configuration."""
+        if self.settings.auto_discover:
+            logger.info("Starting automatic network device discovery...")
+            return await self._auto_discover_devices(network)
+        else:
+            logger.info("Using predefined machine list...")
+            return await self._load_predefined_devices()
+    
+    async def _auto_discover_devices(self, network: str = None) -> List[Device]:
+        """Perform automatic network discovery."""
         try:
+            # Use configured network or provided network
+            discovery_network = network or self.settings.discovery_network
+            
             # Perform network discovery
-            discovered_info = await self._discovery.discover_network_range(network)
+            discovered_info = await self._discovery.discover_network_range(discovery_network)
             
             # Convert to Device objects
             new_devices = self._discovery.create_device_objects()
@@ -273,11 +283,58 @@ class DeviceManager:
                         existing.admin_password = device.admin_password
                         logger.info(f"Updated admin password for device: {device.id}")
             
-            logger.info(f"Device discovery complete: {added_count} new devices added, {len(new_devices)} total discovered")
+            logger.info(f"Auto-discovery complete: {added_count} new devices added, {len(new_devices)} total discovered")
             return new_devices
         
         except Exception as e:
-            logger.error(f"Device discovery failed: {e}")
+            logger.error(f"Auto-discovery failed: {e}")
+            return []
+    
+    async def _load_predefined_devices(self) -> List[Device]:
+        """Load devices from predefined machine list."""
+        try:
+            machine_list = self.settings.parse_machine_list()
+            
+            if not machine_list:
+                logger.warning("No machines defined in MACHINE_LIST or legacy settings")
+                return []
+            
+            # Extract IPs for discovery
+            ip_list = [ip for ip, _ in machine_list]
+            logger.info(f"Loading predefined devices: {ip_list}")
+            
+            # Perform quick scan of specific IPs
+            discovered_info = await self._discovery.quick_scan(ip_list)
+            
+            # Convert to Device objects
+            new_devices = self._discovery.create_device_objects()
+            
+            # Override passwords from configuration
+            for device in new_devices:
+                for ip, password in machine_list:
+                    if device.ip_address == ip and password:
+                        device.admin_password = password
+                        logger.info(f"Applied configured password for device at {ip}")
+            
+            # Add to managed devices
+            added_count = 0
+            for device in new_devices:
+                if device.id not in self._devices:
+                    self._devices[device.id] = device
+                    added_count += 1
+                    logger.info(f"Added predefined device: {device.name} ({device.id}) at {device.ip_address}")
+                else:
+                    # Update existing device
+                    existing = self._devices[device.id]
+                    if device.admin_password and not existing.admin_password:
+                        existing.admin_password = device.admin_password
+                        logger.info(f"Updated admin password for device: {device.id}")
+            
+            logger.info(f"Predefined device loading complete: {added_count} new devices added")
+            return new_devices
+        
+        except Exception as e:
+            logger.error(f"Predefined device loading failed: {e}")
             return []
     
     async def discover_specific_ips(self, ip_list: List[str]) -> List[Device]:

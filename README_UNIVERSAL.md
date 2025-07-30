@@ -116,6 +116,16 @@ Once running, visit:
 ### Environment Variables
 
 ```bash
+# Device Discovery Mode - Choose one approach:
+
+# Option 1: Predefined Machine List (Recommended for production)
+AUTO_DISCOVER=false
+MACHINE_LIST=192.168.1.100:password1,192.168.1.101:,192.168.1.102:password2
+
+# Option 2: Automatic Network Discovery (Great for initial setup)
+AUTO_DISCOVER=true
+DISCOVERY_NETWORK=192.168.1.0/24
+
 # Authentication (optional but recommended)
 API_KEY=your-secure-api-key-here
 SECRET_KEY=your-secret-key-for-hmac-signatures
@@ -125,14 +135,27 @@ WEBHOOK_ENDPOINTS=https://your-server.com/webhook
 POLLING_ENDPOINTS=https://your-server.com/api/jobs
 REMOTE_API_KEY=your-remote-server-api-key
 
-# Network Discovery (optional - auto-detected)
+# SNMP Configuration
 SNMP_COMMUNITY=public
-DISCOVERY_NETWORK=192.168.1.0/24
 
 # Logging
 LOG_LEVEL=INFO
 LOG_FILE=./logs/middleware.log
 ```
+
+### Device Discovery Options
+
+**🎯 Predefined Machine List (AUTO_DISCOVER=false)**
+- **Best for**: Production environments with known printer IPs
+- **Format**: `IP:PASSWORD,IP:PASSWORD` (password optional)  
+- **Example**: `MACHINE_LIST=192.168.1.100:admin123,192.168.1.101:,192.168.1.102:`
+- **Benefits**: Fast startup, predictable, secure
+
+**🔍 Automatic Discovery (AUTO_DISCOVER=true)**
+- **Best for**: Initial setup, dynamic environments
+- **Scans**: Entire network range for KM devices
+- **Example**: `DISCOVERY_NETWORK=192.168.1.0/24`
+- **Benefits**: Finds all devices automatically, tests common passwords
 
 ### Supported Konica Minolta Models
 

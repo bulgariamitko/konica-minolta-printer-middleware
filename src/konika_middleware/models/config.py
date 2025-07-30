@@ -1,6 +1,6 @@
 """Configuration models."""
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Tuple
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
 
@@ -59,7 +59,13 @@ class Settings(BaseSettings):
     api_port: int = Field(default=8000)
     debug: bool = Field(default=False)
     
-    # Printer IPs (set via environment variables)
+    # Device Discovery Mode
+    auto_discover: bool = Field(default=False, description="Enable automatic network discovery")
+    machine_list: str = Field(default="", description="Comma-separated list of IP:PASSWORD pairs")
+    discovery_network: str = Field(default="192.168.0.0/24", description="Network range for auto-discovery")
+    discovery_timeout: int = Field(default=30, description="Discovery timeout in seconds")
+    
+    # Legacy Printer IPs (deprecated - use machine_list instead)
     printer_c654e_ip: str = Field(default="")
     printer_c654e_password: str = Field(default="")
     printer_c759_ip: str = Field(default="")
@@ -70,6 +76,16 @@ class Settings(BaseSettings):
     snmp_community: str = Field(default="public")
     snmp_version: str = Field(default="2c")
     
+    # Authentication
+    api_key: str = Field(default="")
+    secret_key: str = Field(default="")
+    
+    # Remote Communication
+    webhook_endpoints: str = Field(default="")
+    polling_endpoints: str = Field(default="")
+    remote_api_key: str = Field(default="")
+    remote_secret_key: str = Field(default="")
+    
     # Jobs
     max_concurrent_jobs: int = Field(default=5)
     job_timeout_seconds: int = Field(default=300)
@@ -78,6 +94,31 @@ class Settings(BaseSettings):
     # Logging
     log_level: str = Field(default="INFO")
     log_file: Optional[str] = Field(default="./logs/middleware.log")
+    
+    def parse_machine_list(self) -> List[Tuple[str, Optional[str]]]:
+        """Parse machine list into IP and password pairs."""
+        if not self.machine_list.strip():
+            # Fallback to legacy individual printer settings
+            machines = []
+            if self.printer_c654e_ip:
+                machines.append((self.printer_c654e_ip, self.printer_c654e_password or None))
+            if self.printer_c759_ip:
+                machines.append((self.printer_c759_ip, ""))
+            if self.printer_c754e_ip:
+                machines.append((self.printer_c754e_ip, ""))
+            if self.printer_km2100_ip:
+                machines.append((self.printer_km2100_ip, ""))
+            return machines
+        
+        machines = []
+        for entry in self.machine_list.split(','):
+            entry = entry.strip()
+            if ':' in entry:
+                ip, password = entry.split(':', 1)
+                machines.append((ip.strip(), password.strip() if password.strip() else None))
+            else:
+                machines.append((entry.strip(), None))
+        return machines
     
     class Config:
         """Pydantic settings configuration."""

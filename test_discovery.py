@@ -29,6 +29,7 @@ async def test_device_discovery():
     
     # Test specific IP discovery first (faster)
     print("1. Testing specific IP discovery...")
+    print("   NOTE: This simulates predefined machine list mode (AUTO_DISCOVER=false)")
     test_ips = [
         "192.168.0.100",  # Example IP 1 - replace with your printer IPs
         "192.168.0.101",  # Example IP 2
